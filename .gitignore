@@ -1,0 +1,8 @@
+# ignore all below
+.vscode/*
+build/*
+__pycache__/*
+data/*
+*.code-workspace
+
+
