@@ -37,16 +37,11 @@ def load_vgg(sess, vgg_path):
     tf.saved_model.loader.load(sess, [vgg_tag], vgg_path)
     graph = tf.get_default_graph()
     image_input = graph.get_tensor_by_name(vgg_input_tensor_name)
-    #print("vgg image_input.shape: {}".format(image_input.shape))
     keep_prob = graph.get_tensor_by_name(vgg_keep_prob_tensor_name)
-    #print("vgg keep_prob.shape: {}".format(keep_prob.shape))
     layer3_out = graph.get_tensor_by_name(vgg_layer3_out_tensor_name)
-    #layer3_out = tf.stop_gradient(layer3_out)
     layer4_out = graph.get_tensor_by_name(vgg_layer4_out_tensor_name)
-    #layer4_out = tf.stop_gradient(layer4_out)
     layer7_out = graph.get_tensor_by_name(vgg_layer7_out_tensor_name)
-    #layer7_out = tf.stop_gradient(layer7_out)
-    
+        
     return image_input, keep_prob, layer3_out, layer4_out, layer7_out
 tests.test_load_vgg(load_vgg, tf)
 
@@ -62,35 +57,58 @@ def layers(vgg_layer3_out, vgg_layer4_out, vgg_layer7_out, num_classes):
     """
     # Apply 1x1 convolution to final layer from the encoder to preserve spatial information
     # Last step of the encoder
-    conv_1x1 = tf.layers.conv2d(vgg_layer7_out, num_classes, kernel_size=(1, 1), strides=(1, 1),
-                                padding='same', kernel_regularizer=tf.contrib.layers.l2_regularizer(1.0e-3))
+    '''
+    vgg_layer3_out = tf.stop_gradient(vgg_layer3_out)
+    vgg_layer4_out = tf.stop_gradient(vgg_layer4_out)
+    vgg_layer7_out = tf.stop_gradient(vgg_layer7_out)
+    '''
+    # scaling pooling layers
+    vgg_layer3_scaled = tf.multiply(vgg_layer3_out, 0.0001, name="vgg_layer3_scaled")
+    vgg_layer4_scaled = tf.multiply(vgg_layer4_out, 0.01, name='vgg_layer4_scaled')
+    
+    l2 = 1.0e-2
+    vgg_layer7_conv_1x1 = tf.layers.conv2d(vgg_layer7_out, num_classes,
+                                            kernel_size=(1, 1), strides=(1, 1), padding='same',
+                                            kernel_regularizer=tf.contrib.layers.l2_regularizer(l2),
+                                            kernel_initializer= tf.random_normal_initializer(stddev=0.001))
 
     # Decoder
     # Upsample the vgg layers to get back to original image size, adding in 'skip' layers along the way
-    output = tf.layers.conv2d_transpose(conv_1x1, num_classes, kernel_size=4, strides=(2, 2), padding='same',
-                                        kernel_regularizer=tf.contrib.layers.l2_regularizer(1.0e-3))
+
+    #with tf.variable_scope("trainable_section"):
+    output = tf.layers.conv2d_transpose(vgg_layer7_conv_1x1, num_classes,
+                                        kernel_size=(4, 4), strides=(2, 2), padding='same',
+                                        kernel_regularizer=tf.contrib.layers.l2_regularizer(l2),
+                                        kernel_initializer= tf.random_normal_initializer(stddev=0.001))
     
-    # Apply 1x1 conv to get the appropriate shape for adding skip layer to current output
-    vgg_layer4_conv_1x1 = tf.layers.conv2d_transpose(vgg_layer4_out, num_classes, kernel_size=(1, 1),
-                                                    padding='same',
-                                                    kernel_regularizer=tf.contrib.layers.l2_regularizer(1.0e-3))
+    # Apply 1x1 conv to skip layer get the appropriate shape for adding skip layer to current output
+    vgg_layer4_conv_1x1 = tf.layers.conv2d_transpose(vgg_layer4_scaled, num_classes,
+                                                    kernel_size=(1, 1), strides=(1, 1), padding='same',
+                                                    kernel_regularizer=tf.contrib.layers.l2_regularizer(l2),
+                                                    kernel_initializer= tf.random_normal_initializer(stddev=0.001))
     
     output = tf.add(output, vgg_layer4_conv_1x1) # Add 'skip' pooling layer from vgg model
 
     # Upsample
-    output = tf.layers.conv2d_transpose(output, num_classes, kernel_size=4, strides=(2, 2), padding='same',
-                                        kernel_regularizer=tf.contrib.layers.l2_regularizer(1.0e-3))
+    output = tf.layers.conv2d_transpose(output, num_classes,
+                                        kernel_size=(4, 4), strides=(2, 2), padding='same',
+                                        kernel_regularizer=tf.contrib.layers.l2_regularizer(l2),
+                                        kernel_initializer= tf.random_normal_initializer(stddev=0.001))
 
-    # Apply 1x1 conv to get the appropriate shape for adding skip layer to current output
-    vgg_layer3_conv_1x1 = tf.layers.conv2d_transpose(vgg_layer3_out, num_classes, kernel_size=(1, 1),
-                                                    padding='same',
-                                                    kernel_regularizer=tf.contrib.layers.l2_regularizer(1.0e-3))
+    # Apply 1x1 conv to skip layer to get the appropriate shape for adding skip layer to current output
+    vgg_layer3_conv_1x1 = tf.layers.conv2d_transpose(vgg_layer3_scaled, num_classes,
+                                                    kernel_size=(1, 1), strides=(1, 1), padding='same',
+                                                    kernel_regularizer=tf.contrib.layers.l2_regularizer(l2),
+                                                    kernel_initializer= tf.random_normal_initializer(stddev=0.001))
 
     output = tf.add(output, vgg_layer3_conv_1x1) # Add 'skip' pooling layer from vgg model
 
     # Upsample
-    output = tf.layers.conv2d_transpose(output, num_classes, kernel_size=16, strides=(8,8), padding='same',
-                                        kernel_regularizer=tf.contrib.layers.l2_regularizer(1.0e-3))
+    output = tf.layers.conv2d_transpose(output, num_classes,
+                                        kernel_size=(16, 16), strides=(8, 8), padding='same',
+                                        kernel_regularizer=tf.contrib.layers.l2_regularizer(l2),
+                                        kernel_initializer= tf.random_normal_initializer(stddev=0.001))
+
     return output
 tests.test_layers(layers)
 
@@ -104,18 +122,26 @@ def optimize(nn_last_layer, correct_label, learning_rate, num_classes):
     :param num_classes: Number of classes to classify
     :return: Tuple of (logits, train_op, cross_entropy_loss)
     """
+    # Flatten logits and labels
     logits = tf.reshape(nn_last_layer, (-1, num_classes))
+    correct_label = tf.reshape(correct_label, (-1, num_classes))
 
     cross_entropy_loss = tf.reduce_mean(
         tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=correct_label))
     optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
     regularization_losses = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+    
     total_loss = cross_entropy_loss + regularization_losses
 
     train_op = optimizer.minimize(total_loss)
 
+    '''
+    trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "trainable_section")
+    train_op = optimizer.minimize(total_loss, var_list=trainable_vars)
+    '''
+
     return logits, train_op, total_loss
-tests.test_optimize(optimize)
+#tests.test_optimize(optimize)
 
 
 def train_nn(sess, epochs, batch_size, get_batches_fn, train_op, cross_entropy_loss, input_image,
@@ -136,6 +162,11 @@ def train_nn(sess, epochs, batch_size, get_batches_fn, train_op, cross_entropy_l
     
     sess.run(tf.global_variables_initializer())
     
+    '''
+    trainable_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "trainable_section")
+    trainable_variable_initializers = [var.initializer for var in trainable_vars]
+    sess.run(trainable_variable_initializers)
+    '''
     print(">> Training...\n")
 
     start_t = time.process_time()
@@ -147,17 +178,19 @@ def train_nn(sess, epochs, batch_size, get_batches_fn, train_op, cross_entropy_l
                             input_image: batch_images,
                             correct_label: batch_labels,
                             keep_prob: 0.75,
-                            learning_rate: 0.001})
-            
-            print("Epoch: {:<3} Batch: {:<3} Loss: {:<20}".format(epoch+1, batch+1, loss))
+                            learning_rate: 0.0001})
+            time_t = time.process_time()
+
+            print("Epoch: {:<3} Batch: {:<3} Loss: {:<20} Running time: {} ".format(epoch+1, batch+1, loss, time_t - start_t))
             
             batch += 1
 
         # Save the model 
-        if (epoch % 5 == 0 or epoch == epochs):
-            mod_path = "./model/model_epoch{}.ckpt".format(epoch)
-            file_path = saver.save(sess, mod_path)
-            print("Saving model to {}".format(file_path))
+        #if (epoch % 5 == 0 or epoch == epochs):
+        mod_path = "./model/model_epoch{}.ckpt".format(epoch)
+        file_path = saver.save(sess, mod_path)
+        print("Saving model to {}".format(file_path))
+
     end_t = time.process_time()
     print("\nTotal training time: {}".format(end_t - start_t))
 
@@ -179,18 +212,12 @@ def run():
     # You'll need a GPU with at least 10 teraFLOPS to train on.
     #  https://www.cityscapes-dataset.com/
 
-    epochs = 10
-    batch_size = 32
+    epochs = 5
+    batch_size = 8
 
-    
     # tf placeholders
-    #input_image = tf.placeholder(tf.int32, (batch_size, image_shape[0], image_shape[1], image_channels), name="input_image")
-    correct_label = tf.placeholder(tf.int32, (batch_size, image_shape[0], image_shape[1], num_classes), name='correct_label')
+    correct_label = tf.placeholder(tf.int32, (None, None, None, num_classes), name='correct_label')
     learning_rate = tf.placeholder(tf.float32, name='learning_rate')
-    #keep_probability = tf.placeholder(tf.float32, name="keep_probability")
-    
-    
-
 
     with tf.Session() as sess:
         # Path to vgg model
