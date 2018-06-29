@@ -3,7 +3,7 @@ Using a Fully Convolutional Network (FCN), road pixels in images from a driver's
 
 <img width="640" src='./visuals/road-pixels.gif' alt="Images segemented to identify the main road">
 
-In the image above is a sampling of resultant images with the road pixels identified.
+The image above is a sampling of the resultant images with the road pixels identified.
 
 ---
 ### Setup
